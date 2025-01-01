@@ -14,6 +14,7 @@ namespace Symfony\Bundle\MakerBundle\Tests\Maker;
 use Symfony\Bundle\MakerBundle\Maker\MakeWebhook;
 use Symfony\Bundle\MakerBundle\Test\MakerTestCase;
 use Symfony\Bundle\MakerBundle\Test\MakerTestRunner;
+use Symfony\Component\Yaml\Yaml;
 
 class MakeWebhookTest extends MakerTestCase
 {
@@ -268,6 +269,35 @@ class MakeWebhookTest extends MakerTestCase
                         EOF,
                     $requestParserSource
                 );
+            }),
+        ];
+
+        yield 'it_makes_webhook_not_final' => [self::buildMakerTest()
+            ->run(static function (MakerTestRunner $runner) {
+                $runner->writeFile(
+                    'config/packages/dev/maker.yaml',
+                    Yaml::dump(['when@dev' => ['maker' => ['generate_final_classes' => false]]])
+                );
+
+                $runner->runMaker(
+                    [
+                        'remote_service',
+                        '',
+                    ]
+                );
+
+                $outputExpectations = [
+                    'src/Webhook/RemoteServiceRequestParser.php' => 'class RemoteServiceRequestParser extends AbstractRequestParser',
+                    'src/RemoteEvent/RemoteServiceWebhookConsumer.php' => 'class RemoteServiceWebhookConsumer implements ConsumerInterface',
+                ];
+
+                foreach ($outputExpectations as $expectedFileName => $expectedContent) {
+                    $path = $runner->getPath($expectedFileName);
+
+                    self::assertFileExists($runner->getPath($expectedFileName));
+                    self::assertStringNotContainsString('final', file_get_contents($path));
+                    self::assertStringContainsString($expectedContent, file_get_contents($path));
+                }
             }),
         ];
     }
