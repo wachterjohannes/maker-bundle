@@ -38,6 +38,7 @@ use Symfony\Bundle\MakerBundle\Maker\MakeVoter;
 use Symfony\Bundle\MakerBundle\Maker\MakeWebhook;
 use Symfony\Bundle\MakerBundle\Maker\Security\MakeCustomAuthenticator;
 use Symfony\Bundle\MakerBundle\Maker\Security\MakeFormLogin;
+use Symfony\Bundle\MakerBundle\Maker\Security\MakeWebauthn;
 
 return static function (ContainerConfigurator $container) {
     $services = $container->services();
@@ -186,6 +187,13 @@ return static function (ContainerConfigurator $container) {
         ->tag('maker.command');
 
     $services->set('maker.maker.make_custom_authenticator', MakeCustomAuthenticator::class)
+        ->args([
+            service('maker.file_manager'),
+            service('maker.generator'),
+        ])
+        ->tag('maker.command');
+
+    $services->set('maker.maker.make_webauthn_authenticator', MakeWebauthn::class)
         ->args([
             service('maker.file_manager'),
             service('maker.generator'),

@@ -1,0 +1,27 @@
+The <info>%command.name%</info> command generates all the code needed for WebAuthn
+(passwordless) authentication in your Symfony application.
+
+This command will generate:
+  * A WebAuthn credential entity and repository for storing user credentials
+  * A WebAuthn user entity repository for user lookup
+  * A custom WebAuthn authenticator
+  * Configuration files for the WebAuthn bundle
+  * A login controller and template with WebAuthn support
+
+You can customize the class names and Relying Party configuration by answering
+the questions asked when running <info>%command.name%</info>.
+
+This will also:
+  * Update your <info>security.yaml</info> file
+  * Create a <info>webauthn.yaml</info> configuration file
+  * Update your <info>.env</info> file with WebAuthn configuration
+
+<info>php %command.full_name%</info>
+
+After running this command, you'll need to:
+  1. Create and run a database migration
+  2. Install the WebAuthn Stimulus controller: <info>npm install @simplewebauthn/browser</info>
+  3. Review and customize the generated files to match your needs
+
+For more information about WebAuthn, see:
+https://github.com/web-auth/webauthn-framework
