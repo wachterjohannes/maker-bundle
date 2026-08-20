@@ -4,7 +4,6 @@ namespace App\Tests;
 
 use Symfony\Bundle\FrameworkBundle\Console\Application;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
-use Symfony\Component\Console\Command\LazyCommand;
 use Symfony\Component\Console\Tester\CommandTester;
 
 class GeneratedCommandTest extends KernelTestCase
@@ -14,12 +13,9 @@ class GeneratedCommandTest extends KernelTestCase
         self::bootKernel();
         $application = new Application(self::$kernel);
 
-        $command = $application->find('app:foo');
-        if ($command instanceof LazyCommand) {
-            $command = $command->getCommand();
-        }
+        $this->assertTrue(class_exists('Custom\Command\FooCommand'));
 
-        $this->assertStringStartsWith('Custom\\', \get_class($command));
+        $command = $application->find('app:foo');
 
         $tester = new CommandTester($command);
         $tester->execute([]);

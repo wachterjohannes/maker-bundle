@@ -18,13 +18,12 @@ use Symfony\Bundle\MakerBundle\InputConfiguration;
 use Symfony\Bundle\MakerBundle\Str;
 use Symfony\Bundle\MakerBundle\Util\PhpCompatUtil;
 use Symfony\Bundle\MakerBundle\Util\UseStatementGenerator;
+use Symfony\Component\Console\Attribute\Argument;
 use Symfony\Component\Console\Attribute\AsCommand;
+use Symfony\Component\Console\Attribute\Option;
 use Symfony\Component\Console\Command\Command;
-use Symfony\Component\Console\Command\LazyCommand;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
-use Symfony\Component\Console\Input\InputOption;
-use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 /**
@@ -76,12 +75,10 @@ final class MakeCommand extends AbstractMaker
 
         $useStatements = new UseStatementGenerator([
             Command::class,
-            InputArgument::class,
-            InputInterface::class,
-            InputOption::class,
-            OutputInterface::class,
             SymfonyStyle::class,
             AsCommand::class,
+            Argument::class,
+            Option::class,
         ]);
 
         $generator->generateClass(
@@ -90,7 +87,6 @@ final class MakeCommand extends AbstractMaker
             [
                 'use_statements' => $useStatements,
                 'command_name' => $commandName,
-                'set_description' => !class_exists(LazyCommand::class),
             ]
         );
 
