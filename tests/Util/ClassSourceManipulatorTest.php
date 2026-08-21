@@ -875,7 +875,7 @@ class ClassSourceManipulatorTest extends TestCase
      * @requires PHP >= 8.4
      */
     #[\PHPUnit\Framework\Attributes\RequiresPhp('>= 8.4')]
-    public function testParsingPhp84PropertyHooks(): void
+    public function testParsingPhp84PropertyHooks()
     {
         $source = file_get_contents(__DIR__.'/fixtures/source/User_property_hooks.php');
 
@@ -890,7 +890,7 @@ class ClassSourceManipulatorTest extends TestCase
      * @requires PHP >= 8.4
      */
     #[\PHPUnit\Framework\Attributes\RequiresPhp('>= 8.4')]
-    public function testAddPropertyToClassWithPropertyHooks(): void
+    public function testAddPropertyToClassWithPropertyHooks()
     {
         $source = file_get_contents(__DIR__.'/fixtures/source/User_property_hooks.php');
 

@@ -12,6 +12,7 @@
 namespace Symfony\Component\DependencyInjection\Loader\Configurator;
 
 use Symfony\Bundle\MakerBundle\Command\MakerCommand;
+use Symfony\Bundle\MakerBundle\DependencyInjection\DecoratorHelper;
 use Symfony\Bundle\MakerBundle\Doctrine\DoctrineHelper;
 use Symfony\Bundle\MakerBundle\Doctrine\EntityClassGenerator;
 use Symfony\Bundle\MakerBundle\Event\ConsoleErrorSubscriber;
@@ -59,6 +60,13 @@ return static function (ContainerConfigurator $container) {
         ->args([
             '',
             service('doctrine')->ignoreOnInvalid(),
+        ]);
+
+    $services->set('maker.decorator_helper', DecoratorHelper::class)
+        ->args([
+            null, // Service ids
+            null, // Map of service id to class
+            null, // Map of short class name to service ids
         ]);
 
     $services->set('maker.auto_command.abstract', MakerCommand::class)

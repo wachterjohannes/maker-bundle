@@ -27,7 +27,7 @@ class YamlSourceManipulatorTest extends TestCase
      */
     #[DataProvider('getYamlDataTestsUnixSlashes')]
     #[DataProvider('getYamlDataTestsWindowsSlashes')]
-    public function testSetData(string $startingSource, array $newData, string $expectedSource): void
+    public function testSetData(string $startingSource, array $newData, string $expectedSource)
     {
         $manipulator = new YamlSourceManipulator($startingSource);
 
