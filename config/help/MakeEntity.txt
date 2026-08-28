@@ -39,5 +39,21 @@ Append <comment>,multiple</comment> to store several values:
 
 <info>php %command.full_name% BlogPost --field=status:enum:Status --field=labels:enum:Label,multiple</info>
 
-Relations are not supported by this option - run the command without <comment>--field</comment>
-to be guided through them.
+Relations use their own option, <comment>name:type:target</comment>, where the target is an entity
+class - its short name is enough:
+
+<info>php %command.full_name% BlogPost --relation=author:ManyToOne:User --relation=tags:ManyToMany:Tag</info>
+
+A trailing <comment>?</comment> makes the relation nullable here too. Note that this differs from the
+interactive mode, which offers <comment>nullable</comment> as its default answer: without a <comment>?</comment> the
+relation is NOT NULL.
+
+By default the property added to the other class is named after this entity, and a
+<comment>OneToOne</comment> does not add one at all - the interactive mode advises against it, because
+Doctrine cannot lazy load an inverse <comment>OneToOne</comment>. Both are controlled with
+<comment>target-field</comment>, and <comment>orphan-removal</comment> activates orphanRemoval on the relations that
+support it:
+
+<info>php %command.full_name% BlogPost --relation=cover:OneToOne:Media,target-field=post</info>
+<info>php %command.full_name% BlogPost --relation=author:ManyToOne:User,target-field=none</info>
+<info>php %command.full_name% BlogPost --relation=comments:OneToMany:Comment,orphan-removal</info>
