@@ -351,7 +351,7 @@ class MakeResetPassword extends AbstractMaker
         );
 
         // Generate PHPUnit tests
-        if ($this->shouldGenerateTests()) {
+        if ($this->shouldGenerateTests($input)) {
             $testClassDetails = $generator->createClassNameDetails(
                 'ResetPasswordControllerTest',
                 'Test\\',

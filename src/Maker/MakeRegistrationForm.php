@@ -414,7 +414,7 @@ final class MakeRegistrationForm extends AbstractMaker
         }
 
         // Generate PHPUnit Tests
-        if ($this->shouldGenerateTests()) {
+        if ($this->shouldGenerateTests($input)) {
             $testClassDetails = $generator->createClassNameDetails(
                 'RegistrationControllerTest',
                 'Test\\'

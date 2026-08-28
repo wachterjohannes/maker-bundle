@@ -181,7 +181,7 @@ final class MakeFormLogin extends AbstractMaker
             $securityData = $this->securityConfigUpdater->updateForLogout($securityData, $this->firewallToUpdate);
         }
 
-        if ($this->shouldGenerateTests()) {
+        if ($this->shouldGenerateTests($input)) {
             $userClassNameDetails = $generator->createClassNameDetails(
                 '\\'.$this->userClass,
                 'Entity\\'
