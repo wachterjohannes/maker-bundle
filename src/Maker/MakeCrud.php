@@ -33,6 +33,7 @@ use Symfony\Bundle\TwigBundle\TwigBundle;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Question\Question;
 use Symfony\Component\Form\AbstractType;
 use Symfony\Component\HttpFoundation\Request;
@@ -49,7 +50,6 @@ final class MakeCrud extends AbstractMaker
     use CanGenerateTestsTrait;
 
     private Inflector $inflector;
-    private string $controllerClassName;
     private bool $generateTests = false;
 
     public function __construct(private DoctrineHelper $doctrineHelper, private FormTypeRenderer $formTypeRenderer)
@@ -71,6 +71,7 @@ final class MakeCrud extends AbstractMaker
     {
         $command
             ->addArgument('entity-class', InputArgument::OPTIONAL, \sprintf('The class name of the entity to create CRUD (e.g. <fg=yellow>%s</>)', Str::asClassName(Str::getRandomTerm())))
+            ->addOption('controller-class', null, InputOption::VALUE_REQUIRED, 'The class name of the controller to create (e.g. <fg=yellow>SweetFoodAdminController</>), defaults to the entity name plus "Controller"')
             ->setHelp($this->getHelpFileContents('MakeCrud.txt'))
         ;
 
@@ -93,12 +94,14 @@ final class MakeCrud extends AbstractMaker
             $input->setArgument('entity-class', $value);
         }
 
-        $defaultControllerClass = Str::asClassName(\sprintf('%s Controller', $input->getArgument('entity-class')));
+        if (null === $input->getOption('controller-class')) {
+            $defaultControllerClass = self::getDefaultControllerClass($input->getArgument('entity-class'));
 
-        $this->controllerClassName = $io->ask(
-            \sprintf('Choose a name for your controller class (e.g. <fg=yellow>%s</>)', $defaultControllerClass),
-            $defaultControllerClass
-        );
+            $input->setOption('controller-class', $io->ask(
+                \sprintf('Choose a name for your controller class (e.g. <fg=yellow>%s</>)', $defaultControllerClass),
+                $defaultControllerClass
+            ));
+        }
 
         $this->interactSetGenerateTests($input, $io);
     }
@@ -109,6 +112,8 @@ final class MakeCrud extends AbstractMaker
             Validator::entityExists($input->getArgument('entity-class'), $this->doctrineHelper->getEntitiesForAutocomplete()),
             'Entity\\'
         );
+
+        $controllerClassName = $input->getOption('controller-class') ?? self::getDefaultControllerClass($input->getArgument('entity-class'));
 
         $entityDoctrineDetails = $this->doctrineHelper->createDoctrineDetails($entityClassDetails->getFullName());
 
@@ -132,7 +137,7 @@ final class MakeCrud extends AbstractMaker
         }
 
         $controllerClassDetails = $generator->createClassNameDetails(
-            $this->controllerClassName,
+            $controllerClassName,
             'Controller\\',
             'Controller'
         );
@@ -148,7 +153,7 @@ final class MakeCrud extends AbstractMaker
         } while (class_exists($formClassDetails->getFullName()));
 
         $controllerClassData = ClassData::create(
-            class: \sprintf('Controller\%s', $this->controllerClassName),
+            class: \sprintf('Controller\%s', $controllerClassName),
             suffix: 'Controller',
             extendsClass: AbstractController::class,
             useStatements: [
@@ -290,6 +295,11 @@ final class MakeCrud extends AbstractMaker
         $this->writeSuccessMessage($io);
 
         $io->text(\sprintf('Next: Check your new CRUD by going to <fg=yellow>%s/</>', Str::asRoutePath($controllerClassDetails->getRelativeNameWithoutSuffix())));
+    }
+
+    private static function getDefaultControllerClass(string $entityClass): string
+    {
+        return Str::asClassName(\sprintf('%s Controller', $entityClass));
     }
 
     public function configureDependencies(DependencyBuilder $dependencies): void
