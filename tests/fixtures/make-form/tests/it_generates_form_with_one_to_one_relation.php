@@ -12,6 +12,7 @@ use Doctrine\ORM\Query;
 use Doctrine\ORM\QueryBuilder;
 use Doctrine\Persistence\ManagerRegistry;
 use Symfony\Bridge\Doctrine\Form\DoctrineOrmExtension;
+use Symfony\Component\Form\Extension\Validator\ViolationMapper\ViolationMapperInterface;
 use Symfony\Component\Form\PreloadedExtension;
 use Symfony\Component\Form\Test\TypeTestCase;
 
@@ -43,7 +44,7 @@ class GeneratedFormTest extends TypeTestCase
         }
     }
 
-    protected function getExtensions(): array
+    protected function getExtensions(?ViolationMapperInterface $violationMapper = null): array
     {
         $mockEntityManager = $this->createMock(EntityManager::class);
         $mockEntityManager->method('getClassMetadata')
@@ -78,6 +79,6 @@ class GeneratedFormTest extends TypeTestCase
             ->willReturn([$mockEntityManager])
         ;
 
-        return array_merge(parent::getExtensions(), [new DoctrineOrmExtension($mockRegistry)]);
+        return array_merge(parent::getExtensions($violationMapper), [new DoctrineOrmExtension($mockRegistry)]);
     }
 }

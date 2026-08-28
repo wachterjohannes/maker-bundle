@@ -88,6 +88,15 @@ class MakeTestTest extends MakerTestCase
                     ''
                 );
 
+                // Panther serves the app under PANTHER_APP_ENV, which its recipe sets to "panther",
+                // and the Symfony 8 skeleton refuses any environment its kernel does not list
+                $runner->replaceInFile(
+                    'src/Kernel.php',
+                    "return ['prod', 'dev', 'test'];",
+                    "return ['prod', 'dev', 'test', 'panther'];",
+                    allowNotFound: true
+                );
+
                 $runner->runMaker(
                     [
                         // type

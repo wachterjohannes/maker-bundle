@@ -32,6 +32,7 @@
         "doctrine/doctrine-bundle": "^2.10|^3.0",
         "doctrine/orm": "^2.15|^3",
         "doctrine/persistence": "^3.1|^4.0",
+        "symfony/doctrine-bridge": "^7.4|^8.1",
         "symfony/http-client": "^7.4|^8.1",
         "symfony/phpunit-bridge": "^7.4|^8.1",
         "symfony/security-core": "^7.4|^8.1",
