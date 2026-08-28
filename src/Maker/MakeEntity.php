@@ -305,8 +305,8 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
                 throw new \Exception('Invalid value.');
             }
 
-            foreach ($fileManagerOperations as $path => $manipulator) {
-                $this->fileManager->dumpFile($path, $manipulator->getSourceCode());
+            foreach ($fileManagerOperations as $path => $pendingManipulator) {
+                $this->fileManager->dumpFile($path, $pendingManipulator->getSourceCode());
             }
         }
 
