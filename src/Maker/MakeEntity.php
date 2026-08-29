@@ -98,6 +98,7 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
             ->addOption('broadcast', 'b', InputOption::VALUE_NONE, 'Add the ability to broadcast entity updates using Symfony UX Turbo?')
             ->addOption('regenerate', null, InputOption::VALUE_NONE, 'Instead of adding new fields, simply generate the methods (e.g. getter/setter) for existing fields')
             ->addOption('overwrite', null, InputOption::VALUE_NONE, 'Overwrite any existing getter/setter methods')
+            ->addOption('field', null, InputOption::VALUE_REQUIRED | InputOption::VALUE_IS_ARRAY, 'Add a field without being asked for it: <fg=yellow>name[:type[:length]][?]</> (e.g. <fg=yellow>title:string:100</>). Repeat the option for each field')
             ->setHelp($this->getHelpFileContents('MakeEntity.txt'))
         ;
 
@@ -173,9 +174,14 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
     public function generate(InputInterface $input, ConsoleStyle $io, Generator $generator): void
     {
         $overwrite = $input->getOption('overwrite');
+        $fieldOptions = $input->getOption('field');
 
         // the regenerate option has entirely custom behavior
         if ($input->getOption('regenerate')) {
+            if ($fieldOptions) {
+                throw new RuntimeCommandException('The "--field" option cannot be combined with "--regenerate", which only generates methods for existing fields.');
+            }
+
             $this->regenerateEntities($input->getArgument('name'), $overwrite, $generator);
             $this->writeSuccessMessage($io);
 
@@ -188,6 +194,13 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
         );
 
         $classExists = class_exists($entityClassDetails->getFullName());
+
+        // a class that does not exist yet is about to be generated with an "id" property, so that name is taken
+        $queuedFields = $fieldOptions ? $this->parseFieldOptions(
+            $fieldOptions,
+            $classExists ? $this->getPropertyNames($entityClassDetails->getFullName()) : ['id'],
+        ) : null;
+
         if (!$classExists) {
             $broadcast = $input->getOption('broadcast');
             $entityPath = $this->entityClassGenerator->generateEntityClass(
@@ -230,7 +243,9 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
 
         $isFirstField = true;
         while (true) {
-            $newField = $this->askForNextField($io, $currentFields, $entityClassDetails->getFullName(), $isFirstField);
+            $newField = null === $queuedFields
+                ? $this->askForNextField($io, $currentFields, $entityClassDetails->getFullName(), $isFirstField)
+                : array_shift($queuedFields);
             $isFirstField = false;
 
             if (null === $newField) {
@@ -336,6 +351,191 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
         ORMDependencyBuilder::buildDependencies($dependencies);
     }
 
+    /**
+     * @param string[] $definitions
+     * @param string[] $currentFields
+     *
+     * @return ClassProperty[]
+     */
+    private function parseFieldOptions(array $definitions, array $currentFields): array
+    {
+        $properties = [];
+
+        foreach ($definitions as $definition) {
+            $property = $this->parseFieldOption($definition, $currentFields);
+
+            $currentFields[] = $property->propertyName;
+            $properties[] = $property;
+        }
+
+        return $properties;
+    }
+
+    /**
+     * @param string[] $currentFields
+     */
+    private function parseFieldOption(string $definition, array $currentFields): ClassProperty
+    {
+        [$head, $nullable, $modifiers] = $this->splitDefinition($definition);
+
+        $parts = explode(':', $head);
+        $fieldName = array_shift($parts);
+
+        if (!$fieldName) {
+            throw new RuntimeCommandException(\sprintf('The field "%s" is missing a property name.', $definition));
+        }
+
+        if (\in_array($fieldName, $currentFields, true)) {
+            throw new RuntimeCommandException(\sprintf('The "%s" property already exists.', $fieldName));
+        }
+
+        try {
+            Validator::validateDoctrineFieldName($fieldName, $this->doctrineHelper->getRegistry());
+        } catch (\InvalidArgumentException $e) {
+            // the interactive mode asks again, there is nobody to ask here
+            throw new RuntimeCommandException($e->getMessage(), previous: $e);
+        }
+
+        $type = array_shift($parts) ?: $this->guessFieldType($fieldName);
+
+        if ('relation' === $type || \in_array($type, EntityRelation::getValidRelationTypes(), true)) {
+            throw new RuntimeCommandException(\sprintf('The "--field" option cannot add the relation "%s". Run the command without "--field" to be guided through it.', $fieldName));
+        }
+
+        if ('enum' === $type) {
+            // the interactive mode picks the type only after asking, so an enum never goes
+            // through the "string" branch below and never gets a length
+            $classProperty = new ClassProperty(propertyName: $fieldName, type: 'string');
+            $classProperty->enumType = $this->resolveEnumClass(array_shift($parts) ?? '');
+
+            if ($this->takeFlag($modifiers, 'multiple', $definition)) {
+                $classProperty->type = 'simple_array';
+            }
+        } elseif (!\array_key_exists($type, $this->getTypesMap())) {
+            throw new RuntimeCommandException(\sprintf('Invalid type "%s" for field "%s". Run the command without "--field" to see the available types.', $type, $fieldName));
+        } else {
+            $classProperty = new ClassProperty(propertyName: $fieldName, type: $type);
+
+            if ('string' === $type) {
+                $classProperty->length = Validator::validateLength(array_shift($parts) ?: '255');
+            } elseif ('decimal' === $type) {
+                $classProperty->precision = Validator::validatePrecision(array_shift($parts) ?: '10');
+                $classProperty->scale = Validator::validateScale(array_shift($parts) ?: '0');
+            }
+        }
+
+        if ($nullable) {
+            $classProperty->nullable = true;
+        }
+
+        if ($parts) {
+            throw new RuntimeCommandException(\sprintf('The field "%s" has more options than the type "%s" accepts.', $definition, $type));
+        }
+
+        if ($modifiers) {
+            throw new RuntimeCommandException(\sprintf('Unknown modifier "%s" in the field "%s".', array_key_first($modifiers), $definition));
+        }
+
+        return $classProperty;
+    }
+
+    /**
+     * Splits <fieldName>[:<type>...][?][,<modifier>...] into those three parts.
+     *
+     * @return array{string, bool, array<string, string|true>}
+     */
+    private function splitDefinition(string $definition): array
+    {
+        $modifiers = explode(',', $definition);
+        $head = array_shift($modifiers);
+
+        if ($nullable = str_ends_with($head, '?')) {
+            $head = substr($head, 0, -1);
+        }
+
+        $parsedModifiers = [];
+
+        foreach ($modifiers as $modifier) {
+            if (!$modifier) {
+                throw new RuntimeCommandException(\sprintf('The field "%s" has an empty modifier.', $definition));
+            }
+
+            [$name, $value] = explode('=', $modifier, 2) + [1 => true];
+            $parsedModifiers[$name] = $value;
+        }
+
+        return [$head, $nullable, $parsedModifiers];
+    }
+
+    /**
+     * @param array<string, string|true> $modifiers
+     */
+    private function takeFlag(array &$modifiers, string $name, string $definition): bool
+    {
+        $value = $modifiers[$name] ?? null;
+        unset($modifiers[$name]);
+
+        return match ($value) {
+            null => false,
+            true, 'true' => true,
+            'false' => false,
+            default => throw new RuntimeCommandException(\sprintf('The "%s" modifier of the field "%s" takes no value, or "true" or "false".', $name, $definition)),
+        };
+    }
+
+    private function resolveEnumClass(string $enumClass): string
+    {
+        if (!$enumClass) {
+            throw new RuntimeCommandException('An enum field needs the enum class, e.g. "--field=status:enum:App\\Enum\\Status".');
+        }
+
+        if (str_contains($enumClass, '\\')) {
+            return Validator::classIsBackedEnum($enumClass);
+        }
+
+        // a short name spares the caller from escaping backslashes in the shell
+        $enums = (new EnumHelper($this->fileManager->getRootDirectory().'/src', 'App'))->getAllEnums();
+        $matches = array_values(array_filter($enums, static fn (string $enum) => Str::getShortClassName($enum) === $enumClass));
+
+        if (!$matches) {
+            throw new RuntimeCommandException(\sprintf('No backed enum "%s" was found in "src/". Pass its full class name if it lives elsewhere.', $enumClass));
+        }
+
+        if (1 < \count($matches)) {
+            throw new RuntimeCommandException(\sprintf('The enum "%s" is ambiguous, pass a full class name: "%s".', $enumClass, implode('", "', $matches)));
+        }
+
+        return $matches[0];
+    }
+
+    private function guessFieldType(string $fieldName): string
+    {
+        // convert to snake case for simplicity
+        $snakeCasedField = Str::asSnakeCase($fieldName);
+
+        if ('_at' === $suffix = substr($snakeCasedField, -3)) {
+            return 'datetime_immutable';
+        }
+
+        if ('_id' === $suffix) {
+            return 'integer';
+        }
+
+        if (str_starts_with($snakeCasedField, 'is_') || str_starts_with($snakeCasedField, 'has_')) {
+            return 'boolean';
+        }
+
+        if ('uuid' === $snakeCasedField) {
+            return 'uuid';
+        }
+
+        if ('guid' === $snakeCasedField) {
+            return 'guid';
+        }
+
+        return 'string';
+    }
+
     /** @param string[] $fields */
     private function askForNextField(ConsoleStyle $io, array $fields, string $entityClass, bool $isFirstField): EntityRelation|ClassProperty|null
     {
@@ -364,24 +564,7 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
             return null;
         }
 
-        $defaultType = 'string';
-        // try to guess the type by the field name prefix/suffix
-        // convert to snake case for simplicity
-        $snakeCasedField = Str::asSnakeCase($fieldName);
-
-        if ('_at' === $suffix = substr($snakeCasedField, -3)) {
-            $defaultType = 'datetime_immutable';
-        } elseif ('_id' === $suffix) {
-            $defaultType = 'integer';
-        } elseif (str_starts_with($snakeCasedField, 'is_')) {
-            $defaultType = 'boolean';
-        } elseif (str_starts_with($snakeCasedField, 'has_')) {
-            $defaultType = 'boolean';
-        } elseif ('uuid' === $snakeCasedField) {
-            $defaultType = Type::hasType('uuid') ? 'uuid' : 'guid';
-        } elseif ('guid' === $snakeCasedField) {
-            $defaultType = 'guid';
-        }
+        $defaultType = $this->guessFieldType($fieldName);
 
         $type = null;
         $types = $this->getTypesMap();

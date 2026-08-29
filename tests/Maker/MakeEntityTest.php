@@ -823,6 +823,96 @@ class MakeEntityTest extends MakerTestCase
             self::runEntityTest($runner);
         }),
         ];
+
+        yield 'it_creates_fields_from_the_field_option' => [self::createMakeEntityTest()
+            ->run(static function (MakerTestRunner $runner) {
+                $runner->runMaker(
+                    [],
+                    '--no-interaction User --field=name:string:100 --field=biography:text? --field=balance:decimal:10:2 --field=createdAt?'
+                );
+
+                $entity = file_get_contents($runner->getPath('src/Entity/User.php'));
+
+                self::assertStringContainsString('#[ORM\Column(length: 100)]', $entity);
+                self::assertStringContainsString('private ?string $name = null;', $entity);
+                self::assertStringContainsString('#[ORM\\Column(type: Types::TEXT, nullable: true)]', $entity);
+                self::assertStringContainsString('#[ORM\\Column(type: Types::DECIMAL, precision: 10, scale: 2)]', $entity);
+                // the type of "createdAt" is guessed from its name, exactly as in interactive mode
+                self::assertStringContainsString('private ?\\DateTimeImmutable $createdAt = null;', $entity);
+                // a field that is not marked nullable leaves the attribute alone
+                self::assertStringNotContainsString('nullable: false', $entity);
+
+                self::runEntityTest($runner, ['name' => 'John', 'balance' => '10.50']);
+            }),
+        ];
+
+        yield 'it_creates_enum_fields_from_the_field_option' => [self::createMakeEntityTest()
+            ->run(static function (MakerTestRunner $runner) {
+                self::copyEntity($runner, 'Enum/Role-basic.php');
+
+                // "role" resolves by short name, "otherRoles" by full class name; both are
+                // nullable so that the generated entity test can persist a User without them
+                $runner->runMaker(
+                    [],
+                    // double quotes, because cmd.exe does not treat single quotes as quoting
+                    '--no-interaction User --field=role:enum:Role? --field="otherRoles:enum:App\\Entity\\Enum\\Role?,multiple"'
+                );
+
+                $entity = file_get_contents($runner->getPath('src/Entity/User.php'));
+
+                self::assertStringContainsString('#[ORM\\Column(nullable: true, enumType: Role::class)]', $entity);
+                self::assertStringContainsString('private ?Role $role = null;', $entity);
+                self::assertStringContainsString('Types::SIMPLE_ARRAY', $entity);
+                // an enum is not a string field, so it must not pick up a length
+                self::assertStringNotContainsString('length: 255', $entity);
+
+                self::runEntityTest($runner);
+            }),
+        ];
+
+        yield 'it_rejects_invalid_field_options' => [self::createMakeEntityTest()
+            ->run(static function (MakerTestRunner $runner) {
+                $invalidDefinitions = [
+                    // relations need follow-up questions, so they stay interactive-only
+                    'author:ManyToOne' => 'cannot add the relation "author"',
+                    'status:enum' => 'An enum field needs the enum class',
+                    'status:enum:Nope' => 'No backed enum "Nope" was found',
+                    'name:nope' => 'Invalid type "nope"',
+                    'name:string,multiple' => 'Unknown modifier "multiple"',
+                    'name:string,' => 'has an empty modifier',
+                    // the identifier the entity is about to be generated with is already taken
+                    'id:integer' => 'The "id" property already exists.',
+                    'name:string:abc' => 'Invalid length "abc".',
+                    'body:text:100' => 'has more options than the type',
+                    // reserved words and invalid property names are a clean error, not a stack trace
+                    '1name' => 'is not a valid PHP property name',
+                ];
+
+                foreach ($invalidDefinitions as $definition => $expectedError) {
+                    $output = $runner->runMaker(
+                        [],
+                        \sprintf('--no-interaction User --field=%s', $definition),
+                        allowedToFail: true
+                    );
+
+                    self::assertStringContainsString($expectedError, $output, \sprintf('Definition "%s" was not rejected.', $definition));
+                    // nothing is written before every definition has been parsed
+                    self::assertFileDoesNotExist($runner->getPath('src/Entity/User.php'));
+                }
+            }),
+        ];
+
+        yield 'it_rejects_the_field_option_when_regenerating' => [self::createMakeEntityTest()
+            ->run(static function (MakerTestRunner $runner) {
+                $output = $runner->runMaker(
+                    [],
+                    '--no-interaction --regenerate --field=name:string',
+                    allowedToFail: true
+                );
+
+                self::assertStringContainsString('cannot be combined with "--regenerate"', $output);
+            }),
+        ];
     }
 
     /** @param array<string, mixed> $data */
