@@ -339,6 +339,50 @@ class MakeEntityTest extends MakerTestCase
             }),
         ];
 
+        yield 'it_adds_two_relations_in_one_run' => [self::createMakeEntityTest()
+            ->run(static function (MakerTestRunner $runner) {
+                self::copyEntity($runner, 'User-basic.php');
+                self::copyEntity($runner, 'UserAvatarPhoto-basic.php');
+
+                $runner->runMaker([
+                    // entity class name
+                    'Bar',
+                    'author',
+                    'relation',
+                    'User',
+                    'ManyToOne',
+                    // nullable
+                    'n',
+                    // map the inverse side
+                    'y',
+                    // inverse property name - use the default
+                    '',
+                    // orphanRemoval
+                    'n',
+                    'photo',
+                    'relation',
+                    'UserAvatarPhoto',
+                    'ManyToOne',
+                    'n',
+                    'y',
+                    '',
+                    'n',
+                    // finish adding fields
+                    '',
+                ]);
+
+                // writing the second relation used to feed the previous target's manipulator
+                // back into this entity's file, leaving Bar.php with a copy of User
+                self::assertStringContainsString('class Bar', file_get_contents($runner->getPath('src/Entity/Bar.php')));
+                self::assertStringContainsString('class User', file_get_contents($runner->getPath('src/Entity/User.php')));
+                self::assertStringContainsString('class UserAvatarPhoto', file_get_contents($runner->getPath('src/Entity/UserAvatarPhoto.php')));
+
+                $bar = file_get_contents($runner->getPath('src/Entity/Bar.php'));
+                self::assertStringContainsString('private ?User $author = null;', $bar);
+                self::assertStringContainsString('private ?UserAvatarPhoto $photo = null;', $bar);
+            }),
+        ];
+
         yield 'it_adds_many_to_many_simple' => [self::createMakeEntityTest()
             ->run(static function (MakerTestRunner $runner) {
                 self::copyEntity($runner, 'User-basic.php');
