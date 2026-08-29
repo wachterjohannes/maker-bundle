@@ -65,6 +65,44 @@ class MakeCrudTest extends MakerTestCase
             }),
         ];
 
+        yield 'it_generates_crud_non_interactively_with_a_controller_class' => [self::buildMakerTest()
+            ->run(static function (MakerTestRunner $runner) {
+                $runner->copy(
+                    'make-crud/SweetFood.php',
+                    'src/Entity/SweetFood.php'
+                );
+
+                $output = $runner->runMaker(
+                    [],
+                    '--no-interaction SweetFood --controller-class=SweetFoodAdminController'
+                );
+
+                self::assertStringContainsString('src/Controller/SweetFoodAdminController.php', $output);
+                self::assertStringContainsString(
+                    'class SweetFoodAdminController',
+                    file_get_contents($runner->getPath('src/Controller/SweetFoodAdminController.php'))
+                );
+
+                self::runCrudTest($runner, 'it_generates_crud_with_custom_controller.php');
+            }),
+        ];
+
+        yield 'it_generates_crud_non_interactively_without_a_controller_class' => [self::buildMakerTest()
+            ->run(static function (MakerTestRunner $runner) {
+                $runner->copy(
+                    'make-crud/SweetFood.php',
+                    'src/Entity/SweetFood.php'
+                );
+
+                // the name the interactive mode offers as its default, without being asked for it
+                $output = $runner->runMaker([], '--no-interaction SweetFood');
+
+                self::assertStringContainsString('src/Controller/SweetFoodController.php', $output);
+
+                self::runCrudTest($runner, 'it_generates_basic_crud.php');
+            }),
+        ];
+
         yield 'it_generates_crud_with_tests' => [self::buildMakerTest()
             ->addExtraDependencies('symfony/test-pack')
             ->run(static function (MakerTestRunner $runner) {
