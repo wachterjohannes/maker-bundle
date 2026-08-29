@@ -50,7 +50,6 @@ final class MakeCrud extends AbstractMaker
     use CanGenerateTestsTrait;
 
     private Inflector $inflector;
-    private bool $generateTests = false;
 
     public function __construct(private DoctrineHelper $doctrineHelper, private FormTypeRenderer $formTypeRenderer)
     {
@@ -251,7 +250,7 @@ final class MakeCrud extends AbstractMaker
             );
         }
 
-        if ($this->shouldGenerateTests()) {
+        if ($this->shouldGenerateTests($input)) {
             $testClassData = ClassData::create(
                 class: \sprintf('Tests\Controller\%s', $entityClassDetails->getRelativeNameWithoutSuffix()),
                 suffix: 'ControllerTest',

@@ -65,6 +65,17 @@ class MakeControllerTest extends MakerTestCase
             }),
         ];
 
+        yield 'it_generates_a_controller_with_tests_non_interactively' => [self::buildMakerTest()
+            ->addExtraDependencies('symfony/test-pack')
+            ->run(static function (MakerTestRunner $runner) {
+                $output = $runner->runMaker([], 'FooBar --with-tests --no-interaction');
+
+                self::assertStringContainsString('src/Controller/FooBarController.php', $output);
+                self::assertStringContainsString('tests/Controller/FooBarControllerTest.php', $output);
+                self::assertFileExists($runner->getPath('tests/Controller/FooBarControllerTest.php'));
+            }),
+        ];
+
         yield 'it_generates_a_controller__no_input' => [self::buildMakerTest()
             ->run(static function (MakerTestRunner $runner) {
                 $output = $runner->runMaker([], 'FooBar');
