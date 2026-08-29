@@ -870,6 +870,79 @@ class MakeEntityTest extends MakerTestCase
             }),
         ];
 
+        yield 'it_creates_relations_from_the_relation_option' => [self::createMakeEntityTest()
+            ->run(static function (MakerTestRunner $runner) {
+                self::copyEntity($runner, 'User-basic.php');
+
+                $runner->runMaker(
+                    [],
+                    '--no-interaction BlogPost'
+                    .' --relation=author:ManyToOne:User'
+                    .' --relation=editors:ManyToMany:User,target-field=editedPosts'
+                    .' --relation=comments:OneToMany:User,target-field=commentedPost'
+                    .' --relation=cover:OneToOne:User?'
+                    .' --relation=parent:ManyToOne:BlogPost?,target-field=children'
+                );
+
+                $blogPost = file_get_contents($runner->getPath('src/Entity/BlogPost.php'));
+                $user = file_get_contents($runner->getPath('src/Entity/User.php'));
+
+                self::assertStringContainsString('#[ORM\\ManyToOne(inversedBy: \'blogPosts\')]', $blogPost);
+                // without a "?" a relation is NOT NULL, which is where this differs from the
+                // interactive mode - there, nullable is the default answer
+                self::assertStringContainsString('#[ORM\\JoinColumn(nullable: false)]', $blogPost);
+                self::assertStringContainsString('private ?User $author = null;', $blogPost);
+                self::assertStringContainsString('#[ORM\\ManyToMany(targetEntity: User::class, inversedBy: \'editedPosts\')]', $blogPost);
+                self::assertStringContainsString('#[ORM\\OneToMany(targetEntity: User::class, mappedBy: \'commentedPost\')]', $blogPost);
+                self::assertStringContainsString('private ?User $cover = null;', $blogPost);
+                // a self reference resolves even though the class is generated afterwards
+                self::assertStringContainsString('#[ORM\\ManyToOne(targetEntity: self::class, inversedBy: \'children\')]', $blogPost);
+                self::assertStringContainsString('#[ORM\\OneToMany(targetEntity: self::class, mappedBy: \'parent\')]', $blogPost);
+
+                // the property added to the other class is named after this entity by default
+                self::assertStringContainsString('#[ORM\\OneToMany(targetEntity: BlogPost::class, mappedBy: \'author\')]', $user);
+                self::assertStringContainsString('private Collection $blogPosts;', $user);
+                self::assertStringContainsString('#[ORM\\ManyToMany(targetEntity: BlogPost::class, mappedBy: \'editors\')]', $user);
+                self::assertStringContainsString('private ?BlogPost $commentedPost = null;', $user);
+                // a OneToOne does not map its inverse side unless asked to
+                self::assertStringNotContainsString('$cover', $user);
+
+                // and Doctrine accepts every mapping that came out of it
+                $runner->updateSchema();
+            }),
+        ];
+
+        yield 'it_rejects_invalid_relation_options' => [self::createMakeEntityTest()
+            ->run(static function (MakerTestRunner $runner) {
+                self::copyEntity($runner, 'User-basic.php');
+
+                $invalidRelations = [
+                    '--relation=author:ManyToOne' => 'is missing the class it relates to',
+                    '--relation=author:ManyToOne:Nope' => 'Unknown class "Nope"',
+                    '--relation=author:Wrong:User' => 'Invalid relation type "Wrong"',
+                    '--relation=tags:ManyToMany:User?' => 'cannot be nullable',
+                    '--relation=author:ManyToOne:User?,orphan-removal' => 'orphan-removal',
+                    '--relation=comments:OneToMany:User,target-field=none' => 'target-field=none',
+                    '--relation=author:ManyToOne:User,target-field' => 'needs a value',
+                    '--relation=author:ManyToOne:User,nope' => 'Unknown modifier "nope"',
+                    // both would name their property on User after this entity
+                    '--relation=createdBy:ManyToOne:User --relation=updatedBy:ManyToOne:User' => 'blogPosts',
+                ];
+
+                foreach ($invalidRelations as $arguments => $expectedError) {
+                    $output = $runner->runMaker(
+                        [],
+                        \sprintf('--no-interaction BlogPost %s', $arguments),
+                        allowedToFail: true
+                    );
+
+                    self::assertStringContainsString($expectedError, $output, \sprintf('"%s" was not rejected.', $arguments));
+                    // nothing is written before every definition has been parsed
+                    self::assertFileDoesNotExist($runner->getPath('src/Entity/BlogPost.php'));
+                }
+            }),
+        ];
+
         yield 'it_rejects_invalid_field_options' => [self::createMakeEntityTest()
             ->run(static function (MakerTestRunner $runner) {
                 $invalidDefinitions = [
@@ -902,15 +975,17 @@ class MakeEntityTest extends MakerTestCase
             }),
         ];
 
-        yield 'it_rejects_the_field_option_when_regenerating' => [self::createMakeEntityTest()
+        yield 'it_rejects_the_field_and_relation_options_when_regenerating' => [self::createMakeEntityTest()
             ->run(static function (MakerTestRunner $runner) {
-                $output = $runner->runMaker(
-                    [],
-                    '--no-interaction --regenerate --field=name:string',
-                    allowedToFail: true
-                );
+                foreach (['--field=name:string', '--relation=author:ManyToOne:User'] as $option) {
+                    $output = $runner->runMaker(
+                        [],
+                        \sprintf('--no-interaction --regenerate %s', $option),
+                        allowedToFail: true
+                    );
 
-                self::assertStringContainsString('cannot be combined with "--regenerate"', $output);
+                    self::assertStringContainsString('cannot be combined with', $output, \sprintf('"%s" was not rejected.', $option));
+                }
             }),
         ];
     }

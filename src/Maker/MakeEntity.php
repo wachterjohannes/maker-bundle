@@ -99,6 +99,7 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
             ->addOption('regenerate', null, InputOption::VALUE_NONE, 'Instead of adding new fields, simply generate the methods (e.g. getter/setter) for existing fields')
             ->addOption('overwrite', null, InputOption::VALUE_NONE, 'Overwrite any existing getter/setter methods')
             ->addOption('field', null, InputOption::VALUE_REQUIRED | InputOption::VALUE_IS_ARRAY, 'Add a field without being asked for it: <fg=yellow>name[:type[:length]][?]</> (e.g. <fg=yellow>title:string:100</>). Repeat the option for each field')
+            ->addOption('relation', null, InputOption::VALUE_REQUIRED | InputOption::VALUE_IS_ARRAY, 'Add a relation without being asked for it: <fg=yellow>name:type:target[?]</> (e.g. <fg=yellow>author:ManyToOne:User</>). Repeat the option for each relation')
             ->setHelp($this->getHelpFileContents('MakeEntity.txt'))
         ;
 
@@ -175,11 +176,12 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
     {
         $overwrite = $input->getOption('overwrite');
         $fieldOptions = $input->getOption('field');
+        $relationOptions = $input->getOption('relation');
 
         // the regenerate option has entirely custom behavior
         if ($input->getOption('regenerate')) {
-            if ($fieldOptions) {
-                throw new RuntimeCommandException('The "--field" option cannot be combined with "--regenerate", which only generates methods for existing fields.');
+            if ($fieldOptions || $relationOptions) {
+                throw new RuntimeCommandException('The "--field" and "--relation" options cannot be combined with "--regenerate", which only generates methods for existing fields.');
             }
 
             $this->regenerateEntities($input->getArgument('name'), $overwrite, $generator);
@@ -196,8 +198,10 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
         $classExists = class_exists($entityClassDetails->getFullName());
 
         // a class that does not exist yet is about to be generated with an "id" property, so that name is taken
-        $queuedFields = $fieldOptions ? $this->parseFieldOptions(
+        $queuedFields = $fieldOptions || $relationOptions ? $this->parseDefinitions(
             $fieldOptions,
+            $relationOptions,
+            $entityClassDetails->getFullName(),
             $classExists ? $this->getPropertyNames($entityClassDetails->getFullName()) : ['id'],
         ) : null;
 
@@ -262,7 +266,9 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
             } elseif ($newField instanceof EntityRelation) {
                 // both overridden below for OneToMany
                 $newFieldName = $newField->getOwningProperty();
-                if ($newField->isSelfReferencing()) {
+                if ($newField->isSelfReferencing() || $newField->getInverseClass() === $entityClassDetails->getFullName()) {
+                    // either the relation is self referencing, or it is a OneToMany, whose
+                    // branch below resolves the owning class itself and discards what is set here
                     $otherManipulatorFilename = $entityPath;
                     $otherManipulator = $manipulator;
                 } else {
@@ -352,23 +358,246 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
     }
 
     /**
-     * @param string[] $definitions
+     * @param string[] $fieldDefinitions
+     * @param string[] $relationDefinitions
      * @param string[] $currentFields
      *
-     * @return ClassProperty[]
+     * @return array<ClassProperty|EntityRelation>
      */
-    private function parseFieldOptions(array $definitions, array $currentFields): array
+    private function parseDefinitions(array $fieldDefinitions, array $relationDefinitions, string $entityClass, array $currentFields): array
     {
-        $properties = [];
+        $queued = [];
 
-        foreach ($definitions as $definition) {
+        foreach ($fieldDefinitions as $definition) {
             $property = $this->parseFieldOption($definition, $currentFields);
 
             $currentFields[] = $property->propertyName;
-            $properties[] = $property;
+            $queued[] = $property;
         }
 
-        return $properties;
+        // the properties the queued relations add to classes on the other side, so that two
+        // relations sharing a target cannot both fall back to the same name on it
+        $claimedTargetFields = [];
+
+        foreach ($relationDefinitions as $definition) {
+            $relation = $this->parseRelationOption($definition, $entityClass, $currentFields, $claimedTargetFields);
+
+            if ($relation->getOwningClass() === $entityClass) {
+                $currentFields[] = $relation->getOwningProperty();
+            }
+
+            if ($relation->getMapInverseRelation() && $relation->getInverseClass() === $entityClass) {
+                $currentFields[] = $relation->getInverseProperty();
+            }
+
+            $queued[] = $relation;
+        }
+
+        return $queued;
+    }
+
+    /**
+     * @param string[]                $currentFields
+     * @param array<string, string[]> $claimedTargetFields
+     */
+    private function parseRelationOption(string $definition, string $entityClass, array $currentFields, array &$claimedTargetFields): EntityRelation
+    {
+        [$head, $nullable, $modifiers] = $this->splitDefinition($definition);
+
+        $parts = explode(':', $head);
+        $fieldName = $this->parsePropertyName(array_shift($parts), $definition, $currentFields);
+        $type = array_shift($parts) ?? '';
+
+        if (!\in_array($type, EntityRelation::getValidRelationTypes(), true)) {
+            throw new RuntimeCommandException(\sprintf('Invalid relation type "%s" in "%s". Expected one of: "%s".', $type, $definition, implode('", "', EntityRelation::getValidRelationTypes())));
+        }
+
+        $targetClass = $this->resolveRelationTarget(array_shift($parts) ?? '', $entityClass, $definition);
+
+        if ($parts) {
+            throw new RuntimeCommandException(\sprintf('The relation "%s" has more options than "%s" accepts.', $definition, $type));
+        }
+
+        $targetField = $modifiers['target-field'] ?? null;
+        unset($modifiers['target-field']);
+
+        if (true === $targetField) {
+            throw new RuntimeCommandException(\sprintf('The "target-field" modifier of "%s" needs a value: a property name, or "none".', $definition));
+        }
+
+        $orphanRemoval = $this->takeFlag($modifiers, 'orphan-removal', $definition);
+
+        if ($modifiers) {
+            throw new RuntimeCommandException(\sprintf('Unknown modifier "%s" in the relation "%s".', array_key_first($modifiers), $definition));
+        }
+
+        $shortName = Str::getShortClassName($entityClass);
+
+        switch ($type) {
+            case EntityRelation::MANY_TO_ONE:
+                $relation = new EntityRelation(EntityRelation::MANY_TO_ONE, $entityClass, $targetClass);
+                $relation->setOwningProperty($fieldName);
+                $relation->setIsNullable($nullable);
+
+                $this->mapRelationInverseSide($relation, $targetField, Str::singularCamelCaseToPluralCamelCase($shortName), true, $definition, $currentFields, $claimedTargetFields);
+
+                // orphan removal only applies if the inverse relation is set
+                $this->setRelationOrphanRemoval($relation, $orphanRemoval, $definition, $relation->getMapInverseRelation() && !$nullable);
+
+                break;
+
+            case EntityRelation::ONE_TO_MANY:
+                // a OneToMany is really a ManyToOne owned by the class on the other side
+                $relation = new EntityRelation(EntityRelation::MANY_TO_ONE, $targetClass, $entityClass);
+                $relation->setInverseProperty($fieldName);
+                $relation->setIsNullable($nullable);
+
+                if ('none' === $targetField) {
+                    throw new RuntimeCommandException(\sprintf('The relation "%s" cannot use "target-field=none": a OneToMany exists only through the property it adds to the other class.', $definition));
+                }
+
+                if (!$relation->isSelfReferencing() && $this->isClassInVendor($targetClass)) {
+                    throw new RuntimeCommandException(\sprintf('The relation "%s" has to add a property to "%s", which lives in vendor/.', $definition, $targetClass));
+                }
+
+                $relation->setOwningProperty($this->claimTargetField(
+                    $targetField ?? Str::asLowerCamelCase($shortName),
+                    $targetClass,
+                    $definition,
+                    $relation->isSelfReferencing() ? $currentFields : [],
+                    $claimedTargetFields,
+                ));
+
+                $this->setRelationOrphanRemoval($relation, $orphanRemoval, $definition, !$nullable);
+
+                break;
+
+            case EntityRelation::MANY_TO_MANY:
+                if ($nullable) {
+                    throw new RuntimeCommandException(\sprintf('The relation "%s" cannot be nullable: a ManyToMany is a collection, which is empty rather than null.', $definition));
+                }
+
+                $relation = new EntityRelation(EntityRelation::MANY_TO_MANY, $entityClass, $targetClass);
+                $relation->setOwningProperty($fieldName);
+
+                $this->mapRelationInverseSide($relation, $targetField, Str::singularCamelCaseToPluralCamelCase($shortName), true, $definition, $currentFields, $claimedTargetFields);
+                $this->setRelationOrphanRemoval($relation, $orphanRemoval, $definition, false);
+
+                break;
+
+            case EntityRelation::ONE_TO_ONE:
+                $relation = new EntityRelation(EntityRelation::ONE_TO_ONE, $entityClass, $targetClass);
+                $relation->setOwningProperty($fieldName);
+                $relation->setIsNullable($nullable);
+
+                // the interactive mode recommends against mapping the inverse side of a
+                // OneToOne, because Doctrine cannot lazy load it
+                $this->mapRelationInverseSide($relation, $targetField, Str::asLowerCamelCase($shortName), false, $definition, $currentFields, $claimedTargetFields);
+                $this->setRelationOrphanRemoval($relation, $orphanRemoval, $definition, false);
+
+                break;
+
+            default:
+                throw new \LogicException(\sprintf('Unhandled relation type "%s".', $type));
+        }
+
+        return $relation;
+    }
+
+    /**
+     * Decides which property the relation adds to the class on the other side, and whether
+     * that side is mapped at all.
+     *
+     * @param string[]                $currentFields
+     * @param array<string, string[]> $claimedTargetFields
+     */
+    private function mapRelationInverseSide(EntityRelation $relation, ?string $targetField, string $default, bool $mapByDefault, string $definition, array $currentFields, array &$claimedTargetFields): void
+    {
+        $inverseClass = $relation->getInverseClass();
+
+        if (!$relation->isSelfReferencing() && $this->isClassInVendor($inverseClass)) {
+            if (null !== $targetField && 'none' !== $targetField) {
+                throw new RuntimeCommandException(\sprintf('The relation "%s" cannot add a property to "%s", which lives in vendor/.', $definition, $inverseClass));
+            }
+
+            $relation->setMapInverseRelation(false);
+
+            return;
+        }
+
+        if ('none' === $targetField || (null === $targetField && !$mapByDefault)) {
+            $relation->setMapInverseRelation(false);
+
+            return;
+        }
+
+        $relation->setInverseProperty($this->claimTargetField(
+            $targetField ?? $default,
+            $inverseClass,
+            $definition,
+            $relation->isSelfReferencing() ? $currentFields : [],
+            $claimedTargetFields,
+        ));
+    }
+
+    private function setRelationOrphanRemoval(EntityRelation $relation, bool $orphanRemoval, string $definition, bool $applies): void
+    {
+        if (!$orphanRemoval) {
+            return;
+        }
+
+        if (!$applies) {
+            throw new RuntimeCommandException(\sprintf('The relation "%s" cannot use "orphan-removal": it only applies to a ManyToOne or OneToMany that maps both sides and is not nullable.', $definition));
+        }
+
+        $relation->setOrphanRemoval(true);
+    }
+
+    /**
+     * @param string[]                $currentFields
+     * @param array<string, string[]> $claimedTargetFields
+     */
+    private function claimTargetField(string $propertyName, string $targetClass, string $definition, array $currentFields, array &$claimedTargetFields): string
+    {
+        try {
+            Validator::validateDoctrineFieldName($propertyName, $this->doctrineHelper->getRegistry());
+        } catch (\InvalidArgumentException $e) {
+            throw new RuntimeCommandException($e->getMessage(), previous: $e);
+        }
+
+        $taken = array_merge($currentFields, $claimedTargetFields[$targetClass] ?? []);
+
+        if (\in_array($propertyName, $taken, true) || (class_exists($targetClass) && property_exists($targetClass, $propertyName))) {
+            throw new RuntimeCommandException(\sprintf('The "%s" class already has a "%s" property; name the one "%s" adds with "target-field=".', $targetClass, $propertyName, $definition));
+        }
+
+        $claimedTargetFields[$targetClass][] = $propertyName;
+
+        return $propertyName;
+    }
+
+    private function resolveRelationTarget(string $target, string $entityClass, string $definition): string
+    {
+        if (!$target) {
+            throw new RuntimeCommandException(\sprintf('The relation "%s" is missing the class it relates to.', $definition));
+        }
+
+        // a new entity is generated after this runs, so it cannot be looked up yet
+        if ($target === $entityClass || $target === Str::getShortClassName($entityClass)) {
+            return $entityClass;
+        }
+
+        // give the Entity namespace priority over the full class name, to avoid issues with
+        // classes like "Directory" that exist in PHP's core
+        if (class_exists($namespaced = $this->getEntityNamespace().'\\'.$target)) {
+            return $namespaced;
+        }
+
+        if (class_exists($target)) {
+            return $target;
+        }
+
+        throw new RuntimeCommandException(\sprintf('Unknown class "%s" in the relation "%s".', $target, $definition));
     }
 
     /**
@@ -379,27 +608,11 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
         [$head, $nullable, $modifiers] = $this->splitDefinition($definition);
 
         $parts = explode(':', $head);
-        $fieldName = array_shift($parts);
-
-        if (!$fieldName) {
-            throw new RuntimeCommandException(\sprintf('The field "%s" is missing a property name.', $definition));
-        }
-
-        if (\in_array($fieldName, $currentFields, true)) {
-            throw new RuntimeCommandException(\sprintf('The "%s" property already exists.', $fieldName));
-        }
-
-        try {
-            Validator::validateDoctrineFieldName($fieldName, $this->doctrineHelper->getRegistry());
-        } catch (\InvalidArgumentException $e) {
-            // the interactive mode asks again, there is nobody to ask here
-            throw new RuntimeCommandException($e->getMessage(), previous: $e);
-        }
-
+        $fieldName = $this->parsePropertyName(array_shift($parts), $definition, $currentFields);
         $type = array_shift($parts) ?: $this->guessFieldType($fieldName);
 
         if ('relation' === $type || \in_array($type, EntityRelation::getValidRelationTypes(), true)) {
-            throw new RuntimeCommandException(\sprintf('The "--field" option cannot add the relation "%s". Run the command without "--field" to be guided through it.', $fieldName));
+            throw new RuntimeCommandException(\sprintf('The "--field" option cannot add the relation "%s", use "--relation=%s:%s:<target>" instead.', $fieldName, $fieldName, 'relation' === $type ? 'ManyToOne' : $type));
         }
 
         if ('enum' === $type) {
@@ -440,7 +653,28 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
     }
 
     /**
-     * Splits <fieldName>[:<type>...][?][,<modifier>...] into those three parts.
+     * @param string[] $currentFields
+     */
+    private function parsePropertyName(string $propertyName, string $definition, array $currentFields): string
+    {
+        if (!$propertyName) {
+            throw new RuntimeCommandException(\sprintf('The definition "%s" is missing a property name.', $definition));
+        }
+
+        if (\in_array($propertyName, $currentFields, true)) {
+            throw new RuntimeCommandException(\sprintf('The "%s" property already exists.', $propertyName));
+        }
+
+        try {
+            return Validator::validateDoctrineFieldName($propertyName, $this->doctrineHelper->getRegistry());
+        } catch (\InvalidArgumentException $e) {
+            // the interactive mode asks again, there is nobody to ask here
+            throw new RuntimeCommandException($e->getMessage(), previous: $e);
+        }
+    }
+
+    /**
+     * Splits <name>[:<part>...][?][,<modifier>...] into those three parts.
      *
      * @return array{string, bool, array<string, string|true>}
      */
@@ -457,7 +691,7 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
 
         foreach ($modifiers as $modifier) {
             if (!$modifier) {
-                throw new RuntimeCommandException(\sprintf('The field "%s" has an empty modifier.', $definition));
+                throw new RuntimeCommandException(\sprintf('The definition "%s" has an empty modifier.', $definition));
             }
 
             [$name, $value] = explode('=', $modifier, 2) + [1 => true];
@@ -479,7 +713,7 @@ final class MakeEntity extends AbstractMaker implements InputAwareMakerInterface
             null => false,
             true, 'true' => true,
             'false' => false,
-            default => throw new RuntimeCommandException(\sprintf('The "%s" modifier of the field "%s" takes no value, or "true" or "false".', $name, $definition)),
+            default => throw new RuntimeCommandException(\sprintf('The "%s" modifier of "%s" takes no value, or "true" or "false".', $name, $definition)),
         };
     }
 
