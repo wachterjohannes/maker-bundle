@@ -19,11 +19,11 @@ use Symfony\Bundle\MakerBundle\Generator;
 use Symfony\Bundle\MakerBundle\InputConfiguration;
 use Symfony\Bundle\MakerBundle\Maker\AbstractMaker;
 use Symfony\Bundle\MakerBundle\Maker\Common\InstallDependencyTrait;
-use Symfony\Bundle\MakerBundle\Util\ClassNameDetails;
 use Symfony\Bundle\MakerBundle\Util\UseStatementGenerator;
 use Symfony\Bundle\MakerBundle\Util\YamlSourceManipulator;
 use Symfony\Bundle\MakerBundle\Validator;
 use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -47,8 +47,6 @@ final class MakeCustomAuthenticator extends AbstractMaker
 
     private const SECURITY_CONFIG_PATH = 'config/packages/security.yaml';
 
-    private ClassNameDetails $authenticatorClassName;
-
     public function __construct(
         private FileManager $fileManager,
         private Generator $generator,
@@ -68,8 +66,11 @@ final class MakeCustomAuthenticator extends AbstractMaker
     public function configureCommand(Command $command, InputConfiguration $inputConfig): void
     {
         $command
+            ->addArgument('name', InputArgument::OPTIONAL, 'The class name of the authenticator to create (e.g. <fg=yellow>CustomAuthenticator</>)')
             ->setHelp($this->getHelpFileContents('security/MakeCustom.txt'))
         ;
+
+        $inputConfig->setArgumentAsNonInteractive('name');
     }
 
     public function interact(InputInterface $input, ConsoleStyle $io, Command $command): void
@@ -80,32 +81,51 @@ final class MakeCustomAuthenticator extends AbstractMaker
             composerPackage: 'symfony/security-bundle'
         );
 
-        if (!$this->fileManager->fileExists(self::SECURITY_CONFIG_PATH)) {
-            throw new RuntimeCommandException(\sprintf('The file "%s" does not exist. PHP & XML configuration formats are currently not supported.', self::SECURITY_CONFIG_PATH));
+        $this->checkSecurityConfigExists();
+
+        if ($input->getArgument('name')) {
+            return;
         }
 
-        $name = $io->ask(
+        $input->setArgument('name', $io->ask(
             question: 'What is the class name of the authenticator (e.g. <fg=yellow>CustomAuthenticator</>)',
             validator: static function (mixed $answer) {
                 return Validator::notBlank($answer);
             }
-        );
-
-        $this->authenticatorClassName = $this->generator->createClassNameDetails(
-            name: $name,
-            namespacePrefix: 'Security\\',
-            suffix: 'Authenticator'
-        );
+        ));
     }
 
     public function generate(InputInterface $input, ConsoleStyle $io, Generator $generator): void
     {
+        // interact() installs the bundle whose recipe writes security.yaml, and it does not
+        // run without a terminal. Installing twice would be a second composer call, so this
+        // only steps in when interact() did not already do it.
+        if (!$this->fileManager->fileExists(self::SECURITY_CONFIG_PATH)) {
+            $this->installDependencyIfNeeded(
+                io: $io,
+                expectedClassToExist: AbstractAuthenticator::class,
+                composerPackage: 'symfony/security-bundle'
+            );
+        }
+
+        $this->checkSecurityConfigExists();
+
+        if (!$name = $input->getArgument('name')) {
+            throw new RuntimeCommandException('The "name" argument is required when the command runs without asking.');
+        }
+
+        $authenticatorClassName = $this->generator->createClassNameDetails(
+            name: $name,
+            namespacePrefix: 'Security\\',
+            suffix: 'Authenticator'
+        );
+
         // Configure security to use custom authenticator
         $securityConfig = ($ysm = new YamlSourceManipulator(
             $this->fileManager->getFileContents(self::SECURITY_CONFIG_PATH)
         ))->getData();
 
-        $securityConfig['security']['firewalls']['main']['custom_authenticators'] = [$this->authenticatorClassName->getFullName()];
+        $securityConfig['security']['firewalls']['main']['custom_authenticators'] = [$authenticatorClassName->getFullName()];
 
         $ysm->setData($securityConfig);
         $generator->dumpFile(self::SECURITY_CONFIG_PATH, $ysm->getContents());
@@ -125,11 +145,11 @@ final class MakeCustomAuthenticator extends AbstractMaker
         ]);
 
         $generator->generateClass(
-            className: $this->authenticatorClassName->getFullName(),
+            className: $authenticatorClassName->getFullName(),
             templateName: 'security/custom/Authenticator.tpl.php',
             variables: [
                 'use_statements' => $useStatements,
-                'class_short_name' => $this->authenticatorClassName->getShortName(),
+                'class_short_name' => $authenticatorClassName->getShortName(),
             ]
         );
 
@@ -140,5 +160,12 @@ final class MakeCustomAuthenticator extends AbstractMaker
 
     public function configureDependencies(DependencyBuilder $dependencies): void
     {
+    }
+
+    private function checkSecurityConfigExists(): void
+    {
+        if (!$this->fileManager->fileExists(self::SECURITY_CONFIG_PATH)) {
+            throw new RuntimeCommandException(\sprintf('The file "%s" does not exist. PHP & XML configuration formats are currently not supported.', self::SECURITY_CONFIG_PATH));
+        }
     }
 }
